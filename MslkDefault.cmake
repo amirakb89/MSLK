@@ -74,7 +74,8 @@ file(GLOB_RECURSE mslk_cpp_source_files_cuda
 # HIP-specific sources
 file(GLOB_RECURSE mslk_cpp_source_files_hip
   csrc/gemm/ck/*.hip
-  csrc/gemm/ck/**/*.hip)
+  csrc/gemm/ck/**/*.hip
+  csrc/gemm/cublas/f8f8bf16_hipblas.hip)
 
 # HIP FMHA sources - built separately for only the latest GPU architecture
 # to reduce build time and binary size

@@ -42,6 +42,8 @@ TORCH_LIBRARY_FRAGMENT(mslk, m) {
       "f8f8bf16_rowwise_preshuffle(Tensor XQ, Tensor WQ, Tensor x_scale, Tensor w_scale, Tensor? bias=None, bool use_fast_accum=True) -> Tensor");
   m.def(
       "f8f8f16_rowwise_preshuffle(Tensor XQ, Tensor WQ, Tensor x_scale, Tensor w_scale, Tensor? bias=None, bool use_fast_accum=True) -> Tensor");
+  m.def(
+      "f8f8bf16(Tensor XQ, Tensor WQ, Tensor scale, bool use_fast_accum=True) -> Tensor");
   // Generic PyTorch grouped GEMM API is only available on AMD for now.
   m.def(
       "f8f8bf16_rowwise_grouped_mm(Tensor XQ, Tensor WQ, Tensor x_scale, Tensor w_scale, Tensor? offsets, Tensor(a!) output) -> Tensor");
@@ -124,6 +126,7 @@ TORCH_LIBRARY_IMPL(mslk, CUDA, m) {
   m.impl("f8f8f16_rowwise", f8f8f16_rowwise);
   m.impl("f8f8bf16_rowwise_preshuffle", f8f8bf16_rowwise_preshuffle);
   m.impl("f8f8f16_rowwise_preshuffle", f8f8bf16_rowwise_preshuffle);
+  m.impl("f8f8bf16", hipblas::f8f8bf16);
   m.impl("f8f8bf16_rowwise_grouped_mm", f8f8bf16_rowwise_grouped_mm);
   // i8i8bf16 / i8i8bf16_dynamic: dispatched to Python Triton kernels via
   // torch.library.impl registered in mslk/gemm/triton/int8_gemm.py.
@@ -181,6 +184,7 @@ TORCH_LIBRARY_IMPL(mslk, CPU, m) {
   m.impl("f8f8f16_rowwise", f8f8f16_rowwise);
   m.impl("f8f8bf16_rowwise_preshuffle", f8f8bf16_rowwise_preshuffle);
   m.impl("f8f8f16_rowwise_preshuffle", f8f8bf16_rowwise_preshuffle);
+  m.impl("f8f8bf16", hipblas::f8f8bf16);
   m.impl("f8f8bf16_rowwise_grouped_mm", f8f8bf16_rowwise_grouped_mm);
   // i8i8bf16 / i8i8bf16_dynamic: Python Triton dispatch; no CPU fallback
   // needed.

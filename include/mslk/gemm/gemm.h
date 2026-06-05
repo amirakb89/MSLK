@@ -38,6 +38,16 @@ at::Tensor f8f8f16_rowwise_preshuffle(
     std::optional<at::Tensor> bias = std::nullopt,
     bool use_fast_accum = true);
 
+#ifdef USE_ROCM
+namespace hipblas {
+at::Tensor f8f8bf16(
+    at::Tensor XQ,
+    at::Tensor WQ,
+    at::Tensor scale,
+    bool use_fast_accum = true);
+} // namespace hipblas
+#endif
+
 std::vector<at::Tensor> f8f8bf16_rowwise_grouped(
     at::TensorList XQ,
     at::TensorList WQ,

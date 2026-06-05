@@ -669,7 +669,7 @@ class CutlassFP8Tensorwise(GemmOpBase):
 
     @property
     def supported_accelerators(self) -> set[Accelerator]:
-        return {Accelerator.NVIDIA_SM90}
+        return {Accelerator.NVIDIA_SM90, Accelerator.AMD_MI300X}
 
     @property
     def supported_gemm_types(self) -> set[GemmType]:

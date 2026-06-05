@@ -371,9 +371,9 @@ class FP8Tests(unittest.TestCase):
             [True, False],  # use_fast_accum
         )
     )
-    @unittest.skipIf(not torch.version.cuda, "Skip on AMD: f8f8bf16 not yet supported.")
     @unittest.skipIf(
-        not evaluate_cuda_compute_capability(9, 9), "Only SM90 is supported."
+        torch.version.cuda is not None and not evaluate_cuda_compute_capability(9, 9),
+        "On CUDA, only SM90 is supported.",
     )
     def test_f8f8bf16(self, kernel: str, use_fast_accum: bool) -> None:
         M = 128
