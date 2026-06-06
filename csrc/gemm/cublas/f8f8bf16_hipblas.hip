@@ -14,10 +14,10 @@ namespace mslk::gemm::hipblas {
 namespace {
 
 inline void checkHipblasStatus(hipblasStatus_t status) {
-  if (status != HIPBLAS_STATUS_SUCCESS) {
-    printf("hipBLASLt API failed with status %d\n", status);
-    throw std::logic_error("hipBLASLt API failed");
-  }
+  TORCH_CHECK(
+      status == HIPBLAS_STATUS_SUCCESS,
+      "hipBLASLt API failed with status ",
+      static_cast<int>(status));
 }
 
 } // namespace
@@ -93,9 +93,18 @@ at::Tensor f8f8bf16(
   // exists in this version). Broadcast the per-tensor scale to a length-N
   // device buffer ourselves. Stays on stream — graph-capturable.
   at::Tensor alpha_buf = scale.expand({N}).contiguous();
-  // Beta also lives on device under POINTER_MODE_DEVICE; persistent zero.
-  static thread_local at::Tensor beta_dev =
-      at::zeros({1}, at::TensorOptions().device(at::kCUDA).dtype(at::kFloat));
+  // Beta also lives on device under POINTER_MODE_DEVICE; persistent zero
+  // cached per device so multi-GPU callers don't get a pointer on the wrong
+  // device (hipBLASLt would see invalid memory when peer access is off).
+  static thread_local std::vector<at::Tensor> beta_dev_cache;
+  const auto device_index = XQ.device().index();
+  if (static_cast<size_t>(device_index) >= beta_dev_cache.size()) {
+    beta_dev_cache.resize(device_index + 1);
+  }
+  at::Tensor& beta_dev = beta_dev_cache[device_index];
+  if (!beta_dev.defined()) {
+    beta_dev = at::zeros({1}, XQ.options().dtype(at::kFloat));
+  }
   const void* alpha_ptr = alpha_buf.data_ptr<float>();
   const void* beta_ptr = beta_dev.data_ptr<float>();
 
