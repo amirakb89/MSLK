@@ -49,3 +49,9 @@ if torch.version.hip is not None:
         from .flydsl import (  # noqa: F401
             fp8_groupwise_grouped_gemm as _flydsl_groupwise_grouped,
         )
+
+        # Bind the FlyDSL FP8 rowwise-preshuffle kernels to the mslk:: op names
+        # (WP-G3: overrides the CK DeviceGemmMultiD_Xdl_CShuffle_V3_BPreshuffle
+        # path on gfx942/gfx950).  The import is what runs the
+        # @torch.library.impl decorations, so it must not be dropped.
+        from . import flydsl  # noqa: F401
