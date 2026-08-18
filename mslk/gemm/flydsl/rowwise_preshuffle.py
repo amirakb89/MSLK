@@ -74,7 +74,7 @@ Config = Tuple[int, ...]
 # catalogued in _CK_FASTER below as the remaining Phase-B work. Trailing comment
 # on each row is the measured FlyDSL-vs-CK speedup.
 # ─────────────────────────────────────────────────────────────────────────────
-_TUNED: dict = {
+_TUNED_GFX942: dict = {
     # ── decode (M <= 128): FlyDSL's strong regime, up to 2.5x ──
     (1, 896, 5120): (16, 64, 512, 1, True, None),  # 2.48x
     (1, 1280, 8192): (16, 64, 512, 1, True, None),  # 2.31x
@@ -142,6 +142,181 @@ _TUNED: dict = {
     (16384, 8192, 3584): (128, 256, 128, 1, True, None),  # 1.03x
     (16384, 13312, 6656): (128, 256, 128, 1, False, 2),  # 1.04x
     (16384, 16384, 6656): (128, 256, 128, 1, False, 2),  # 1.03x
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Autotuned shape -> best config table, gfx950 (MI350).
+#
+# Source: bench/gemm/autotune_preshuffle.py --model all --wide, run on gfx950
+# (fp8_e4m3fn), sharded one K-group per GPU across 8 GPUs.  154 of 156 shapes
+# produced a valid config; 504 configs swept per K-group (144 for K=640).
+#
+# Selection metric is GPU kernel time (summed per-kernel device time from the
+# profiler), NOT wall time.  The FlyDSL launch path costs ~26 us of host-side
+# Python per call, which exceeds the kernel itself for every decode shape, so
+# wall-clock tuning selects from noise in exactly the regime that matters most.
+#
+# Unlike _TUNED_GFX942, every measured shape is baked here, including the ones
+# where CK is still ahead: this table only chooses *which FlyDSL config* runs,
+# and the alternative (_fallback_config) is slower still, not CK.  The trailing
+# comment is kernel-time speedup vs the CK instance MSLK's heuristic dispatches
+# on gfx950 -- not vs CK's best instance, which needs ckProfiler.
+# ─────────────────────────────────────────────────────────────────────────────
+_TUNED_GFX950: dict = {
+    (1, 896, 5120): (16, 64, 256, 2, True, None),  # 0.88x vs CK
+    (1, 1280, 8192): (16, 64, 512, 2, True, 2),  # 0.93x vs CK
+    (1, 2048, 5120): (16, 64, 256, 2, True, 2),  # 0.76x vs CK
+    (1, 5120, 1024): (16, 64, 256, 1, False, None),  # 0.99x vs CK
+    (1, 7168, 8192): (16, 64, 512, 2, True, None),  # 0.81x vs CK
+    (1, 8192, 1024): (16, 64, 256, 1, True, None),  # 1.01x vs CK
+    (1, 8192, 3584): (16, 64, 512, 2, True, 4),  # 0.95x vs CK
+    (1, 13312, 6656): (16, 64, 512, 2, False, 2),  # 0.95x vs CK
+    (1, 13312, 16384): (16, 64, 512, 2, False, None),  # 1.05x vs CK
+    (1, 16384, 6656): (16, 64, 512, 2, True, None),  # 1.00x vs CK
+    (1, 16384, 16384): (16, 128, 256, 2, False, 2),  # 1.15x vs CK
+    (16, 896, 5120): (16, 64, 256, 2, True, 4),  # 0.97x vs CK
+    (16, 1280, 8192): (16, 64, 512, 2, True, 2),  # 0.92x vs CK
+    (16, 2048, 5120): (16, 64, 256, 2, True, 2),  # 0.87x vs CK
+    (16, 5120, 1024): (16, 64, 256, 1, False, None),  # 1.08x vs CK
+    (16, 7168, 8192): (16, 64, 512, 2, True, None),  # 0.81x vs CK
+    (16, 8192, 1024): (16, 64, 256, 1, False, None),  # 0.96x vs CK
+    (16, 8192, 3584): (16, 64, 512, 2, True, 4),  # 1.15x vs CK
+    (16, 13312, 6656): (16, 64, 512, 2, False, 2),  # 1.00x vs CK
+    (16, 13312, 16384): (16, 64, 512, 2, True, None),  # 1.02x vs CK
+    (16, 16384, 6656): (16, 64, 512, 2, False, 2),  # 1.00x vs CK
+    (16, 16384, 16384): (16, 64, 512, 2, False, 4),  # 1.01x vs CK
+    (32, 896, 5120): (16, 64, 256, 2, True, 4),  # 0.82x vs CK
+    (32, 1280, 8192): (16, 64, 512, 2, True, None),  # 1.23x vs CK
+    (32, 2048, 5120): (16, 64, 256, 2, True, None),  # 1.11x vs CK
+    (32, 5120, 640): (32, 64, 128, 2, True, 4),  # 1.26x vs CK
+    (32, 5120, 1024): (16, 64, 256, 1, False, None),  # 1.04x vs CK
+    (32, 7168, 8192): (32, 64, 512, 2, True, None),  # 0.94x vs CK
+    (32, 8192, 1024): (16, 64, 256, 1, False, 2),  # 0.96x vs CK
+    (32, 8192, 3584): (32, 64, 512, 2, True, None),  # 1.13x vs CK
+    (32, 13312, 6656): (32, 64, 512, 2, True, None),  # 1.09x vs CK
+    (32, 13312, 16384): (32, 64, 512, 2, False, 2),  # 1.08x vs CK
+    (32, 16384, 6656): (32, 64, 512, 2, False, 2),  # 1.06x vs CK
+    (32, 16384, 16384): (32, 64, 512, 2, False, 4),  # 1.14x vs CK
+    (64, 896, 5120): (16, 64, 256, 2, True, 4),  # 1.21x vs CK
+    (64, 1280, 8192): (32, 64, 512, 2, True, None),  # 1.41x vs CK
+    (64, 2048, 5120): (32, 64, 512, 2, True, None),  # 1.18x vs CK
+    (64, 5120, 640): (32, 64, 128, 2, True, 4),  # 1.33x vs CK
+    (64, 5120, 1024): (32, 64, 256, 2, True, 2),  # 0.93x vs CK
+    (64, 7168, 8192): (32, 64, 512, 2, False, None),  # 0.79x vs CK
+    (64, 8192, 1024): (32, 64, 256, 2, True, 2),  # 0.85x vs CK
+    (64, 8192, 3584): (64, 64, 256, 2, True, 4),  # 0.86x vs CK
+    (64, 13312, 6656): (64, 64, 256, 2, True, None),  # 1.28x vs CK
+    (64, 13312, 16384): (64, 64, 512, 2, True, None),  # 1.22x vs CK
+    (64, 16384, 6656): (64, 64, 256, 2, True, None),  # 1.24x vs CK
+    (64, 16384, 16384): (64, 64, 256, 2, True, None),  # 1.36x vs CK
+    (96, 896, 5120): (16, 64, 512, 2, True, 2),  # 1.38x vs CK
+    (96, 1280, 8192): (32, 64, 512, 2, True, 4),  # 1.43x vs CK
+    (96, 2048, 5120): (32, 64, 512, 2, True, 2),  # 1.26x vs CK
+    (96, 5120, 640): (32, 64, 128, 2, True, 4),  # 1.27x vs CK
+    (96, 5120, 1024): (32, 64, 256, 2, True, 2),  # 0.89x vs CK
+    (96, 7168, 8192): (128, 64, 256, 2, True, 2),  # 0.79x vs CK
+    (96, 8192, 1024): (64, 64, 256, 2, True, 4),  # 1.37x vs CK
+    (96, 8192, 3584): (128, 64, 256, 2, True, None),  # 0.79x vs CK
+    (96, 13312, 6656): (128, 64, 256, 2, True, None),  # 1.22x vs CK
+    (96, 13312, 16384): (128, 64, 256, 2, True, 4),  # 1.20x vs CK
+    (96, 16384, 6656): (128, 64, 256, 2, True, 4),  # 1.18x vs CK
+    (96, 16384, 16384): (128, 64, 256, 2, True, 2),  # 1.30x vs CK
+    (128, 896, 5120): (32, 64, 512, 2, True, None),  # 1.26x vs CK
+    (128, 1280, 8192): (32, 64, 512, 2, True, None),  # 1.42x vs CK
+    (128, 2048, 5120): (32, 64, 512, 2, True, None),  # 1.14x vs CK
+    (128, 5120, 640): (32, 128, 128, 1, False, 4),  # 1.45x vs CK
+    (128, 5120, 1024): (64, 64, 256, 2, True, 4),  # 1.13x vs CK
+    (128, 7168, 8192): (64, 64, 512, 2, True, None),  # 0.77x vs CK
+    (128, 8192, 1024): (64, 64, 256, 2, True, 4),  # 1.37x vs CK
+    (128, 8192, 3584): (64, 64, 256, 2, True, 4),  # 0.80x vs CK
+    (128, 13312, 6656): (128, 64, 256, 2, True, 2),  # 1.17x vs CK
+    (128, 13312, 16384): (128, 64, 256, 2, True, 4),  # 1.18x vs CK
+    (128, 16384, 6656): (128, 64, 256, 2, True, 4),  # 1.04x vs CK
+    (128, 16384, 16384): (128, 64, 256, 2, True, 4),  # 1.35x vs CK
+    (256, 896, 5120): (16, 64, 512, 2, True, 2),  # 1.33x vs CK
+    (256, 1280, 8192): (32, 64, 512, 2, False, None),  # 59.34x vs CK
+    (256, 2048, 5120): (64, 64, 256, 2, True, None),  # 40.57x vs CK
+    (256, 5120, 640): (32, 256, 128, 1, False, 2),  # 1.40x vs CK
+    (256, 5120, 1024): (64, 64, 128, 2, True, 2),  # 1.18x vs CK
+    (256, 7168, 8192): (128, 64, 256, 2, True, None),  # 31.05x vs CK
+    (256, 8192, 1024): (128, 64, 256, 2, True, 2),  # 1.42x vs CK
+    (256, 8192, 3584): (128, 64, 256, 2, True, None),  # 25.65x vs CK
+    (256, 13312, 6656): (128, 128, 256, 2, True, 2),  # 23.36x vs CK
+    (256, 13312, 16384): (128, 128, 256, 2, True, 4),  # 25.41x vs CK
+    (256, 16384, 6656): (128, 128, 256, 2, True, 2),  # 21.59x vs CK
+    (256, 16384, 16384): (128, 128, 256, 2, True, 4),  # 22.77x vs CK
+    (512, 896, 5120): (32, 64, 512, 2, True, 2),  # 1.21x vs CK
+    (512, 1280, 8192): (32, 128, 256, 2, True, None),  # 45.57x vs CK
+    (512, 2048, 5120): (32, 128, 256, 2, True, None),  # 36.21x vs CK
+    (512, 5120, 640): (64, 128, 128, 2, True, 4),  # 1.77x vs CK
+    (512, 5120, 1024): (128, 128, 256, 2, True, 4),  # 1.58x vs CK
+    (512, 7168, 8192): (128, 64, 256, 2, True, 2),  # 23.51x vs CK
+    (512, 8192, 1024): (128, 128, 256, 2, True, None),  # 1.91x vs CK
+    (512, 8192, 3584): (128, 64, 128, 2, True, 2),  # 20.19x vs CK
+    (512, 13312, 6656): (256, 128, 128, 2, True, 4),  # 30.75x vs CK
+    (512, 13312, 16384): (256, 128, 128, 2, True, 4),  # 35.58x vs CK
+    (512, 16384, 6656): (256, 128, 128, 2, True, 4),  # 31.38x vs CK
+    (512, 16384, 16384): (256, 128, 128, 2, True, 4),  # 29.33x vs CK
+    (1024, 896, 5120): (32, 128, 256, 2, True, None),  # 41.16x vs CK
+    (1024, 1280, 8192): (64, 128, 256, 2, True, None),  # 37.85x vs CK
+    (1024, 2048, 5120): (64, 128, 512, 1, False, 2),  # 29.31x vs CK
+    (1024, 5120, 640): (64, 128, 128, 1, False, 2),  # 1.33x vs CK
+    (1024, 5120, 1024): (256, 64, 128, 2, True, 2),  # 20.35x vs CK
+    (1024, 7168, 8192): (256, 64, 128, 2, True, None),  # 0.84x vs CK
+    (1024, 8192, 1024): (256, 64, 128, 2, True, 4),  # 1.00x vs CK
+    (1024, 8192, 3584): (256, 128, 128, 2, True, 4),  # 0.91x vs CK
+    (1024, 13312, 6656): (256, 128, 128, 2, True, 2),  # 1.01x vs CK
+    (1024, 13312, 16384): (256, 128, 128, 2, True, 2),  # 0.90x vs CK
+    (1024, 16384, 6656): (256, 128, 128, 2, True, 2),  # 1.02x vs CK
+    (1024, 16384, 16384): (256, 128, 128, 2, True, 2),  # 0.99x vs CK
+    (2048, 896, 5120): (64, 128, 512, 1, True, None),  # 1.78x vs CK
+    (2048, 1280, 8192): (128, 128, 256, 2, True, None),  # 1.42x vs CK
+    (2048, 2048, 5120): (128, 128, 256, 2, True, 4),  # 1.32x vs CK
+    (2048, 5120, 640): (128, 128, 128, 2, True, None),  # 1.60x vs CK
+    (2048, 5120, 1024): (128, 128, 128, 2, True, 2),  # 1.39x vs CK
+    (2048, 7168, 8192): (256, 128, 128, 2, True, 2),  # 1.13x vs CK
+    (2048, 8192, 1024): (128, 256, 128, 1, True, None),  # 1.33x vs CK
+    (2048, 8192, 3584): (256, 128, 128, 2, True, 2),  # 1.20x vs CK
+    (2048, 13312, 6656): (128, 128, 256, 2, True, 2),  # 0.98x vs CK
+    (2048, 13312, 16384): (128, 128, 256, 2, True, 4),  # 0.87x vs CK
+    (2048, 16384, 6656): (256, 128, 128, 2, True, 2),  # 1.16x vs CK
+    (2048, 16384, 16384): (256, 128, 128, 2, True, 2),  # 1.09x vs CK
+    (4096, 896, 5120): (64, 128, 256, 2, True, None),  # 1.55x vs CK
+    (4096, 1280, 8192): (128, 128, 128, 2, True, 2),  # 1.16x vs CK
+    (4096, 2048, 5120): (128, 128, 256, 2, True, 2),  # 1.10x vs CK
+    (4096, 5120, 640): (128, 128, 128, 2, True, None),  # 1.90x vs CK
+    (4096, 5120, 1024): (128, 128, 128, 2, True, None),  # 1.69x vs CK
+    (4096, 7168, 8192): (128, 128, 256, 2, True, 2),  # 43.70x vs CK
+    (4096, 8192, 1024): (128, 256, 128, 1, False, 2),  # 1.71x vs CK
+    (4096, 8192, 3584): (256, 128, 128, 2, True, 2),  # 39.35x vs CK
+    (4096, 13312, 6656): (256, 128, 128, 2, True, 2),  # 34.87x vs CK
+    (4096, 13312, 16384): (256, 128, 128, 2, True, 2),  # 36.61x vs CK
+    (4096, 16384, 6656): (256, 128, 128, 2, True, 2),  # 38.01x vs CK
+    (4096, 16384, 16384): (128, 256, 128, 2, True, 2),  # 33.06x vs CK
+    (8192, 896, 5120): (128, 128, 128, 2, True, None),  # 49.63x vs CK
+    (8192, 1280, 8192): (128, 128, 256, 2, True, 2),  # 35.70x vs CK
+    (8192, 2048, 5120): (256, 128, 128, 2, True, 2),  # 48.76x vs CK
+    (8192, 5120, 640): (128, 128, 128, 2, True, None),  # 1.54x vs CK
+    (8192, 5120, 1024): (128, 256, 128, 1, False, None),  # 28.18x vs CK
+    (8192, 7168, 8192): (256, 128, 128, 2, True, 2),  # 41.18x vs CK
+    (8192, 8192, 1024): (128, 256, 128, 1, False, 2),  # 31.14x vs CK
+    (8192, 8192, 3584): (256, 128, 128, 2, True, 2),  # 36.44x vs CK
+    (8192, 13312, 6656): (256, 128, 128, 2, True, 2),  # 39.19x vs CK
+    (8192, 13312, 16384): (256, 128, 128, 2, True, 2),  # 39.65x vs CK
+    (8192, 16384, 6656): (256, 128, 128, 2, True, 2),  # 38.77x vs CK
+    (8192, 16384, 16384): (256, 128, 128, 2, True, 2),  # 36.75x vs CK
+    (16384, 896, 5120): (256, 128, 128, 2, True, 2),  # 51.40x vs CK
+    (16384, 1280, 8192): (128, 128, 256, 2, True, 2),  # 41.82x vs CK
+    (16384, 2048, 5120): (128, 256, 128, 1, True, 2),  # 42.37x vs CK
+    (16384, 5120, 640): (128, 128, 128, 2, True, None),  # 1.61x vs CK
+    (16384, 5120, 1024): (128, 256, 128, 1, True, None),  # 30.24x vs CK
+    (16384, 7168, 8192): (256, 128, 128, 2, True, 2),  # 39.07x vs CK
+    (16384, 8192, 1024): (256, 128, 128, 1, True, 2),  # 27.78x vs CK
+    (16384, 8192, 3584): (256, 128, 128, 2, True, 2),  # 35.44x vs CK
+    (16384, 13312, 6656): (256, 128, 128, 2, True, 2),  # 38.38x vs CK
+    (16384, 13312, 16384): (256, 128, 128, 2, True, 2),  # 29.29x vs CK
+    (16384, 16384, 6656): (256, 128, 128, 2, True, 2),  # 31.41x vs CK
+    (16384, 16384, 16384): (256, 128, 128, 2, True, 2),  # 28.89x vs CK
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -305,15 +480,23 @@ def _fallback_config(M: int, N: int, K: int) -> Config:
     )
 
 
+@functools.lru_cache(maxsize=1)
+def _tuned_table() -> dict:
+    """The tuned table for the current GPU.
+
+    The two tables are NOT interchangeable: they were swept on different
+    architectures, against different FP8 formats (e4m3fnuz on gfx942, e4m3fn on
+    gfx950), and the gfx942 sweep used wall-clock timing while the gfx950 sweep
+    used GPU kernel time.  Applying the gfx942 table to gfx950 measurably
+    regresses large-N shapes -- its fallbacks pick tile_n=64 against N=8192.
+    """
+    _, arch = _kernel_api()
+    return _TUNED_GFX950 if arch.startswith("gfx950") else _TUNED_GFX942
+
+
 # Pick the kernel config for a shape: tuned table if present, else fallback.
-#
-# NOTE: _TUNED was swept on gfx942 (see its header comment).  Its entries are
-# legal on gfx950 -- the tile shapes are valid and gfx950 has strictly more LDS
-# -- so they are used on both architectures rather than falling back to the
-# untuned heuristic.  Re-sweeping on gfx950 is Phase B; until then these configs
-# are "known-good on gfx942, unmeasured on gfx950".
 def _select_config(M: int, N: int, K: int) -> Config:
-    cfg = _TUNED.get((M, N, K))
+    cfg = _tuned_table().get((M, N, K))
     return cfg if cfg is not None else _fallback_config(M, N, K)
 
 

@@ -429,12 +429,32 @@ def main():
     ap.add_argument("--ck-profiler", default=None, metavar="PATH",
                     help="true upstream-CK baseline via CK ckProfiler binary "
                          "(overrides --baseline; sweeps all CK instances)")
+    ap.add_argument("--only-k", type=int, default=None, metavar="K",
+                    help="tune only this K-group.  K-groups are independent, so "
+                         "sharding by K lets one process per GPU run "
+                         "concurrently (see --list-k); merge the per-shard "
+                         "--out files afterwards.")
+    ap.add_argument("--list-k", action="store_true",
+                    help="print the K-groups for the selected model and exit")
     args = ap.parse_args()
 
     shapes = _selected_shapes(args.model, args.limit)
     # Distinct K values, in first-seen order. We tune per K so each config
     # compiles once and is reused across all (M,N) that share that K.
     ks = list(dict.fromkeys(K for (_M, _N, K) in shapes))
+
+    if args.list_k:
+        for K in ks:
+            print(f"{K} {len(_mns_for_K(args.model, args.limit, K))}")
+        return
+
+    if args.only_k is not None:
+        if args.only_k not in ks:
+            raise SystemExit(
+                f"K={args.only_k} is not a K-group of model={args.model}; "
+                f"available: {ks}"
+            )
+        ks = [args.only_k]
 
     ck_mode = "upstream(ckProfiler)" if args.ck_profiler else \
               "aiter" if args.baseline else "none"
