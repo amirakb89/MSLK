@@ -186,22 +186,36 @@ def _compile(K, cfg, out_dtype="bf16"):
 
 
 def _perftest(launch, num_iters=20, num_warmup=5):
-    """Median-free mean wall time in microseconds, via CUDA events.
+    """Mean GPU kernel time in microseconds.
 
     Replaces aiter's tests.test_common.run_perftest, which is not available in
     MSLK.
+
+    Measures *device* time, not wall time.  The FlyDSL launch path costs roughly
+    26 us of host-side Python per call on this stack, which is far more than the
+    kernel itself for decode shapes (M <= 128, ~5-15 us).  Timing with CUDA
+    events around a host-side loop therefore returns ~26 us for every config and
+    the sweep degenerates into picking noise.  Summing per-kernel device time
+    from the profiler isolates the quantity we are actually tuning.
     """
+    from torch.profiler import profile, ProfilerActivity
+
     for _ in range(num_warmup):
         launch()
     torch.cuda.synchronize()
-    start = torch.cuda.Event(enable_timing=True)
-    end = torch.cuda.Event(enable_timing=True)
-    start.record()
-    for _ in range(num_iters):
-        launch()
-    end.record()
-    torch.cuda.synchronize()
-    return start.elapsed_time(end) * 1000.0 / num_iters  # ms -> us
+
+    with profile(activities=[ProfilerActivity.CUDA]) as prof:
+        for _ in range(num_iters):
+            launch()
+        torch.cuda.synchronize()
+
+    total_us = 0.0
+    for evt in prof.key_averages():
+        name = evt.key.lower()
+        if "memset" in name or "memcpy" in name:
+            continue
+        total_us += getattr(evt, "self_device_time_total", 0) or 0
+    return total_us / num_iters
 
 
 def _time_shape(fn, M, N, prob):
