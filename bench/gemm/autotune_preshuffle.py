@@ -153,13 +153,20 @@ def _as_i8(t):
 
 
 def _make_problem(M, N, K):
-    from tests.utils import pertoken_quant, shuffle_weight
+    # Was `from tests.utils import pertoken_quant, shuffle_weight` -- aiter's
+    # dev-checkout test helpers, which are not available in MSLK.  The in-tree
+    # equivalents are quantize_fp8_row (per-token/row FP8 quant, arch-correct
+    # dtype) and ck_preshuffle(w, 16), which is byte-identical to aiter's
+    # shuffle_weight(..., layout=(16, 16)) and to flydsl_preshuffle.
+    from mslk.quantize.shuffle import ck_preshuffle
+    from mslk.quantize.triton.fp8_quantize import quantize_fp8_row
+
     torch.manual_seed(0)
     a = torch.rand(M, K, device="cuda", dtype=torch.float32)
     b = torch.rand(N, K, device="cuda", dtype=torch.float32)
-    a_q, sa = pertoken_quant(a, quant_dtype=DTYPE_FP8)
-    b_q, sb = pertoken_quant(b, quant_dtype=DTYPE_FP8)
-    b_shuf = shuffle_weight(b_q.contiguous(), layout=(16, 16))
+    a_q, sa = quantize_fp8_row(a)
+    b_q, sb = quantize_fp8_row(b)
+    b_shuf = ck_preshuffle(b_q.contiguous(), 16)
     c_ref = (a_q.float() * sa.view(-1, 1)) @ (b_q.float() * sb.view(-1, 1)).T
     return a_q.contiguous(), b_shuf, sa.view(-1).contiguous(), sb.view(-1).contiguous(), c_ref
 
@@ -178,22 +185,57 @@ def _compile(K, cfg, out_dtype="bf16"):
         lds_stage=lds, use_async_copy=aco, waves_per_eu=wpe)
 
 
+def _perftest(launch, num_iters=20, num_warmup=5):
+    """Median-free mean wall time in microseconds, via CUDA events.
+
+    Replaces aiter's tests.test_common.run_perftest, which is not available in
+    MSLK.
+    """
+    for _ in range(num_warmup):
+        launch()
+    torch.cuda.synchronize()
+    start = torch.cuda.Event(enable_timing=True)
+    end = torch.cuda.Event(enable_timing=True)
+    start.record()
+    for _ in range(num_iters):
+        launch()
+    end.record()
+    torch.cuda.synchronize()
+    return start.elapsed_time(end) * 1000.0 / num_iters  # ms -> us
+
+
 def _time_shape(fn, M, N, prob):
     """Time an already-compiled kernel on one (M, N); None if numerically wrong."""
-    from tests.test_common import run_perftest
+    import flydsl.expr as fx  # pyre-ignore[21]
+    from mslk.flydsl.jit import ptr_arg, run_compiled
+
     a_q, b_shuf, sa, sb, c_ref = prob
     c = torch.zeros((M, N), dtype=torch.bfloat16, device="cuda")
+    # The kernel always takes a bias pointer; this op has no fused bias.
+    dummy_bias = torch.empty(1, dtype=torch.bfloat16, device="cuda")
 
-    def launch(c, a, b, x, w):
-        fn(c.view(-1), _as_i8(a.view(-1)), _as_i8(b.view(-1)), x, w,
-           M, N, torch.cuda.current_stream())
+    # Operand order matches launch_gemm in
+    # mslk/gemm/flydsl/_kernels/preshuffle_gemm.py: scales BEFORE bias.  The
+    # compile_preshuffle_gemm_a8 docstring lists a stale order; do not follow it.
+    def launch():
+        run_compiled(
+            fn,
+            ptr_arg(c.view(-1)),
+            ptr_arg(_as_i8(a_q).view(-1)),
+            ptr_arg(_as_i8(b_shuf).view(-1)),
+            ptr_arg(sa),
+            ptr_arg(sb),
+            ptr_arg(dummy_bias),
+            M,
+            N,
+            fx.Stream(torch.cuda.current_stream()),
+        )
 
-    launch(c, a_q, b_shuf, sa, sb)
+    launch()
     torch.cuda.synchronize()
     if not torch.allclose(c.float(), c_ref, rtol=0.1, atol=0.1):
         return None
-    _, us = run_perftest(launch, c, a_q, b_shuf, sa, sb, num_iters=20, num_warmup=5)
-    return float(us)
+    return float(_perftest(launch))
 
 
 # ── Shape selection (identical in parent and worker so config indices line up) ─
