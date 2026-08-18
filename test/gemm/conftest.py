@@ -27,6 +27,8 @@ import torch
 from torch.library import Library
 
 # 1. Make the FlyDSL `flydsl` + `kernels` packages importable (dev checkout).
+#    A real build gets `flydsl` from pip and the kernel template from
+#    mslk.gemm.flydsl._kernels, so this is a no-op there.
 _FLYDSL_ROOT = os.environ.get("FLYDSL_ROOT") or os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "..", "flyDSL")
 )
@@ -34,13 +36,24 @@ if os.path.isdir(_FLYDSL_ROOT) and _FLYDSL_ROOT not in sys.path:
     sys.path.insert(0, _FLYDSL_ROOT)
 
 # 2. Declare the op schemas the mslk C++ library would provide in a real build.
+#
+#    IMPORTANT: try the compiled library FIRST.  Defining these schemas from
+#    Python and *then* loading mslk.so makes the library's own m.def collide
+#    with them, which aborts the interpreter (a C++ TORCH_CHECK, not a catchable
+#    Python exception).  Only fall back to stub schemas when there is genuinely
+#    no compiled library, i.e. the MSLK_PYTHON_ONLY sandbox this file was
+#    originally written for.
 _SIG = (
     "(Tensor XQ, Tensor WQ, Tensor x_scale, Tensor w_scale, "
     "Tensor? bias=None, bool use_fast_accum=True) -> Tensor"
 )
 
-# Held at module scope so the schema registration persists for the session.
-_LIB = Library("mslk", "FRAGMENT")
+try:
+    import mslk  # noqa: F401  loads mslk.so and its op schemas
+
+    _HAVE_COMPILED_MSLK = not getattr(mslk, "_python_only", False)
+except Exception:
+    _HAVE_COMPILED_MSLK = False
 
 
 def _op_missing(name: str) -> bool:
@@ -51,6 +64,9 @@ def _op_missing(name: str) -> bool:
         return True
 
 
-for _name in ("f8f8bf16_rowwise_preshuffle", "f8f8f16_rowwise_preshuffle"):
-    if _op_missing(_name):
-        _LIB.define(f"{_name}{_SIG}")
+if not _HAVE_COMPILED_MSLK:
+    # Held at module scope so the schema registration persists for the session.
+    _LIB = Library("mslk", "FRAGMENT")
+    for _name in ("f8f8bf16_rowwise_preshuffle", "f8f8f16_rowwise_preshuffle"):
+        if _op_missing(_name):
+            _LIB.define(f"{_name}{_SIG}")
