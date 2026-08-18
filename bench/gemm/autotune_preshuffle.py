@@ -170,7 +170,7 @@ def _make_problem(M, N, K):
 # JitFunction across every (M, N) that shares that K — this is what avoids the
 # ~17x redundant recompiles the naive per-(M,N,K) loop was doing.
 def _compile(K, cfg, out_dtype="bf16"):
-    from kernels.preshuffle_gemm import compile_preshuffle_gemm_a8
+    from mslk.gemm.flydsl._kernels.preshuffle_gemm import compile_preshuffle_gemm_a8
     tm, tn, tk, lds, aco, wpe = cfg
     return compile_preshuffle_gemm_a8(
         M=0, N=0, K=K, tile_m=tm, tile_n=tn, tile_k=tk,

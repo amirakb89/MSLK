@@ -8,7 +8,7 @@
 
 """FlyDSL-backed GEMM kernels for MSLK (ROCm / gfx942, gfx950)."""
 
-from mslk.gemm.flydsl.preshuffle_gemm import (
+from mslk.gemm.flydsl.rowwise_preshuffle import (
     f8f8bf16_rowwise_preshuffle,
     f8f8f16_rowwise_preshuffle,
 )

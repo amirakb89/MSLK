@@ -144,12 +144,17 @@ TORCH_LIBRARY_IMPL(mslk, CUDA, m) {
 
 #ifdef USE_ROCM
   m.impl("f8f8f16_rowwise", f8f8f16_rowwise);
-  // f8f8bf16_rowwise_preshuffle / f8f8f16_rowwise_preshuffle: dispatched to the
-  // FlyDSL kernel via torch.library.impl registered in
-  // mslk/gemm/flydsl/register.py (WP-G3 replaces the CK
-  // DeviceGemmMultiD_Xdl_CShuffle_V3_BPreshuffle path). Do NOT re-add a CK
-  // m.impl here — the Python registration is intentionally the sole CUDA impl
-  // and will raise if a CK binding shadows it.
+  // f8f8bf16_rowwise_preshuffle / f8f8f16_rowwise_preshuffle: the CK
+  // DeviceGemmMultiD_Xdl_CShuffle_V3_BPreshuffle path stays registered here as
+  // the baseline impl.  On gfx942/gfx950 it is overridden at import time by the
+  // FlyDSL kernel via torch.library.impl (mslk/gemm/flydsl/register.py, WP-G3);
+  // PyTorch logs an "overriding a previously registered kernel" warning when
+  // that happens, which is expected.  Keeping CK bound means these ops are
+  // never left unimplemented if the Python module fails to import.
+  m.impl("f8f8bf16_rowwise_preshuffle", f8f8bf16_rowwise_preshuffle);
+  // NOTE: binds the *fp16* symbol.  This previously bound
+  // f8f8bf16_rowwise_preshuffle, so the fp16 op silently returned bf16.
+  m.impl("f8f8f16_rowwise_preshuffle", f8f8f16_rowwise_preshuffle);
   m.impl("f8f8bf16_rowwise_grouped_mm", f8f8bf16_rowwise_grouped_mm);
   // i8i8bf16 / i8i8bf16_dynamic: dispatched to Python Triton kernels via
   // torch.library.impl registered in mslk/gemm/triton/int8_gemm.py.
@@ -207,9 +212,11 @@ TORCH_LIBRARY_IMPL(mslk, CPU, m) {
 
 #ifdef USE_ROCM
   m.impl("f8f8f16_rowwise", f8f8f16_rowwise);
-  // f8f8bf16_rowwise_preshuffle / f8f8f16_rowwise_preshuffle: FlyDSL-backed via
-  // torch.library.impl (mslk/gemm/flydsl/register.py). GPU-only op; no CPU
-  // fallback, matching the i8i8bf16 ROCm dispatch pattern.
+  // f8f8bf16_rowwise_preshuffle / f8f8f16_rowwise_preshuffle: CK baseline,
+  // overridden by FlyDSL on gfx942/gfx950 (mslk/gemm/flydsl/register.py).
+  m.impl("f8f8bf16_rowwise_preshuffle", f8f8bf16_rowwise_preshuffle);
+  // NOTE: binds the *fp16* symbol; see the CUDA block above.
+  m.impl("f8f8f16_rowwise_preshuffle", f8f8f16_rowwise_preshuffle);
   m.impl("f8f8bf16_rowwise_grouped_mm", f8f8bf16_rowwise_grouped_mm);
   // i8i8bf16 / i8i8bf16_dynamic: Python Triton dispatch; no CPU fallback
   // needed.
