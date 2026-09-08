@@ -163,8 +163,17 @@ TORCH_LIBRARY_IMPL(mslk, CUDA, m) {
 
 #ifdef USE_ROCM
   m.impl("f8f8f16_rowwise", f8f8f16_rowwise);
+  // f8f8bf16_rowwise_preshuffle / f8f8f16_rowwise_preshuffle: the CK
+  // DeviceGemmMultiD_Xdl_CShuffle_V3_BPreshuffle path stays registered here as
+  // the baseline impl.  On gfx942/gfx950 it is overridden at import time by the
+  // FlyDSL kernel via torch.library.impl (mslk/gemm/flydsl/register.py, WP-G3);
+  // PyTorch logs an "overriding a previously registered kernel" warning when
+  // that happens, which is expected.  Keeping CK bound means these ops are
+  // never left unimplemented if the Python module fails to import.
   m.impl("f8f8bf16_rowwise_preshuffle", f8f8bf16_rowwise_preshuffle);
-  m.impl("f8f8f16_rowwise_preshuffle", f8f8bf16_rowwise_preshuffle);
+  // NOTE: binds the *fp16* symbol.  This previously bound
+  // f8f8bf16_rowwise_preshuffle, so the fp16 op silently returned bf16.
+  m.impl("f8f8f16_rowwise_preshuffle", f8f8f16_rowwise_preshuffle);
   // Deliberately unregistered: a Python torch.library.impl owns the CUDA key
   // for each of these on ROCm, and a C++ registration here would leave that
   // binding overriding this one rather than being the only implementation.
@@ -231,8 +240,11 @@ TORCH_LIBRARY_IMPL(mslk, CPU, m) {
 
 #ifdef USE_ROCM
   m.impl("f8f8f16_rowwise", f8f8f16_rowwise);
+  // f8f8bf16_rowwise_preshuffle / f8f8f16_rowwise_preshuffle: CK baseline,
+  // overridden by FlyDSL on gfx942/gfx950 (mslk/gemm/flydsl/register.py).
   m.impl("f8f8bf16_rowwise_preshuffle", f8f8bf16_rowwise_preshuffle);
-  m.impl("f8f8f16_rowwise_preshuffle", f8f8bf16_rowwise_preshuffle);
+  // NOTE: binds the *fp16* symbol; see the CUDA block above.
+  m.impl("f8f8f16_rowwise_preshuffle", f8f8f16_rowwise_preshuffle);
   // The ops left out here are the ones a Python torch.library.impl owns on
   // ROCm, listed against the CUDA registration above. They are bound on the
   // CUDA key alone, so calling one on a CPU tensor raises rather than falling

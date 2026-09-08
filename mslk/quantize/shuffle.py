@@ -183,14 +183,20 @@ def ck_preshuffle(src: torch.Tensor, NXdl: int = 16) -> torch.Tensor:
     """
     Applies shuffling to make weights more efficient for use with CK kernels.
     Args:
-        src (torch.Tensor): Input tensor with dtype float8_e4m3fnuz.
+        src (torch.Tensor): Input tensor with an FP8 e4m3 dtype.  Both AMD
+            variants are accepted: ``float8_e4m3fnuz`` (gfx942) and
+            ``float8_e4m3fn`` (gfx950/OCP).  The shuffle is a pure byte
+            permutation, so it is independent of the exponent bias.
         NXdl (int): Wave tile size along N.
     Returns:
         torch.Tensor: The shuffled tensor.
     """
-    # Check input datatype
-    if src.dtype != torch.float8_e4m3fnuz:
-        raise TypeError("Input must be type float8_e4m3fnuz.")
+    # Check input datatype.  Historically this accepted only e4m3fnuz, which
+    # made the helper unusable on gfx950 -- quantize_fp8_row emits e4m3fn there.
+    if src.dtype not in (torch.float8_e4m3fnuz, torch.float8_e4m3fn):
+        raise TypeError(
+            f"Input must be float8_e4m3fnuz or float8_e4m3fn, got {src.dtype}."
+        )
     N, K = src.shape
     KPack = 16
     NLane = NXdl
