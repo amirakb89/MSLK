@@ -26,7 +26,6 @@ if is_flydsl_available():
     )
 from mslk.gemm.triton.grouped_gemm import grouped_gemm, grouped_gemm_fp8_rowwise
 from mslk.quantize.shuffle import (
-    ck_preshuffle,
     int4_row_quantize_zp,
     pack_int4,
     preshuffle_b_mfma,
@@ -695,21 +694,32 @@ class FP8Rowwise(GemmOpBase):
 @register_gemm_op
 class FP8RowwisePreshuffle(FP8Rowwise):
     """
-    FP8 matmul with rowwise scaling and preshuffling of input B.
+    FP8 matmul with rowwise scaling and preshuffling of input B, through the
+    public op: FlyDSL on gfx950 (once mslk.gemm.flydsl.preshuffle_gemm is
+    imported, as it is above), CK on gfx942.
     """
+
+    _op_name = "f8f8bf16_rowwise_preshuffle"
+
+    @property
+    def name(self) -> str:
+        # Not "CK"-prefixed like FP8Rowwise: on gfx950 FlyDSL serves this op.
+        return self.__class__.__name__
 
     def __init__(self):
         self.fast_accum = True
         if self.supported:
-            self.gemm_op = torch.ops.mslk.f8f8bf16_rowwise_preshuffle
+            self.gemm_op = getattr(torch.ops.mslk, self._op_name)
 
     def preprocess(self, x, w):
         x, wq, w_scale = super().preprocess(x, w)
-        return x, ck_preshuffle(wq, 16), w_scale
+        # Same layout as ck_preshuffle(wq, 16), but also takes gfx950's OCP
+        # e4m3fn, where ck_preshuffle only accepts e4m3fnuz.
+        return x, preshuffle_b_mfma(wq), w_scale
 
     @property
     def supported_accelerators(self) -> set[Accelerator]:
-        return {Accelerator.AMD_GFX942}
+        return {Accelerator.AMD_GFX942, Accelerator.AMD_GFX950}
 
     @property
     def supported_gemm_types(self) -> set[GemmType]:
@@ -718,6 +728,38 @@ class FP8RowwisePreshuffle(FP8Rowwise):
     @property
     def compute_dtype(self) -> ComputeDtype:
         return ComputeDtype.FP8
+
+
+@register_gemm_op
+class FP8RowwisePreshuffleF16(FP8RowwisePreshuffle):
+    """FP16-output sibling of FP8RowwisePreshuffle."""
+
+    _op_name = "f8f8f16_rowwise_preshuffle"
+
+
+@register_gemm_op
+class CKFP8RowwisePreshuffle(FP8RowwisePreshuffle):
+    """
+    The CK preshuffle kernels on gfx950, through their private op name, as the
+    baseline for the FlyDSL kernels that serve the public op there.
+    """
+
+    _op_name = "_f8f8bf16_rowwise_preshuffle_ck"
+
+    @property
+    def supported_accelerators(self) -> set[Accelerator]:
+        return {Accelerator.AMD_GFX950}
+
+    @property
+    def supported(self) -> bool:
+        return super().supported and hasattr(torch.ops.mslk, self._op_name)
+
+
+@register_gemm_op
+class CKFP8RowwisePreshuffleF16(CKFP8RowwisePreshuffle):
+    """FP16-output sibling of CKFP8RowwisePreshuffle."""
+
+    _op_name = "_f8f8f16_rowwise_preshuffle_ck"
 
 
 @register_gemm_op

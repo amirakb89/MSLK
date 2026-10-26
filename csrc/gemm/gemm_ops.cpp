@@ -84,6 +84,13 @@ TORCH_LIBRARY_FRAGMENT(mslk, m) {
 #ifdef USE_ROCM
   m.def(
       "_bf16bf16bf16_grouped_stacked_ck(Tensor X, Tensor W, Tensor M_sizes, Tensor? out=None, int? num_sms=None) -> Tensor");
+  // The CK FP8 rowwise preshuffle kernels under private names. On gfx950 the
+  // public ops are served by FlyDSL (mslk/gemm/flydsl/preshuffle_gemm.py);
+  // these keep CK reachable as the reference for tests and benchmarks.
+  m.def(
+      "_f8f8bf16_rowwise_preshuffle_ck(Tensor XQ, Tensor WQ, Tensor x_scale, Tensor w_scale, Tensor? bias=None, bool use_fast_accum=True) -> Tensor");
+  m.def(
+      "_f8f8f16_rowwise_preshuffle_ck(Tensor XQ, Tensor WQ, Tensor x_scale, Tensor w_scale, Tensor? bias=None, bool use_fast_accum=True) -> Tensor");
   // Sibling of f8f8bf16_groupwise_grouped taking weights already swizzled into
   // the MFMA B layout; schema only on ROCm, implemented by the same FlyDSL
   // module via torch.library.impl at Python import time.
@@ -164,9 +171,11 @@ TORCH_LIBRARY_IMPL(mslk, CUDA, m) {
 
 #ifdef USE_ROCM
   m.impl("_bf16bf16bf16_grouped_stacked_ck", bf16bf16bf16_grouped_stacked);
+  m.impl("_f8f8bf16_rowwise_preshuffle_ck", f8f8bf16_rowwise_preshuffle);
+  m.impl("_f8f8f16_rowwise_preshuffle_ck", f8f8f16_rowwise_preshuffle);
   m.impl("f8f8f16_rowwise", f8f8f16_rowwise);
   m.impl("f8f8bf16_rowwise_preshuffle", f8f8bf16_rowwise_preshuffle);
-  m.impl("f8f8f16_rowwise_preshuffle", f8f8bf16_rowwise_preshuffle);
+  m.impl("f8f8f16_rowwise_preshuffle", f8f8f16_rowwise_preshuffle);
 #ifdef MSLK_ENABLE_MI45X_ATEN_GROUPED_GEMM_FALLBACK
   m.impl("f8f8bf16_rowwise_grouped_mm", f8f8bf16_rowwise_grouped_mm);
 #endif
@@ -242,7 +251,7 @@ TORCH_LIBRARY_IMPL(mslk, CPU, m) {
 #ifdef USE_ROCM
   m.impl("f8f8f16_rowwise", f8f8f16_rowwise);
   m.impl("f8f8bf16_rowwise_preshuffle", f8f8bf16_rowwise_preshuffle);
-  m.impl("f8f8f16_rowwise_preshuffle", f8f8bf16_rowwise_preshuffle);
+  m.impl("f8f8f16_rowwise_preshuffle", f8f8f16_rowwise_preshuffle);
   // The ops left out here are the ones a Python torch.library.impl owns on
   // ROCm, listed against the CUDA registration above. They are bound on the
   // CUDA key alone, so calling one on a CPU tensor raises rather than falling

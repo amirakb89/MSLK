@@ -9,7 +9,9 @@
 """FlyDSL preshuffle GEMM for FP8 rowwise scaling (gfx950).
 
 Provides single and batched FP8 preshuffle GEMM via FlyDSL. Also registers
-as the ROCm implementation of the ``mslk`` rowwise FP8 ops on gfx950.
+as the ROCm implementation of the ``mslk`` rowwise FP8 ops on gfx950,
+including the preshuffle ops (``f8f8bf16_rowwise_preshuffle``,
+``f8f8f16_rowwise_preshuffle``) that take CK-preshuffled weights.
 """
 
 import weakref
@@ -117,10 +119,15 @@ def select_default_config(m: int, n: int, k: int, batch: int = 1) -> KernelConfi
 
 
 def flydsl_preshuffle(src: Tensor) -> Tensor:
-    """Shuffle FP8 weight tensor into FlyDSL preshuffle layout.
+    """Shuffle FP8 weight tensor into the preshuffle layout this kernel reads.
 
-    This is NOT interchangeable with ``ck_preshuffle`` -- the two produce
-    different memory layouts.
+    For 1-byte types this is the same layout as ``ck_preshuffle(src, 16)`` and
+    ``preshuffle_b_mfma(src)``, byte for byte: the 16-row N blocks are laid out
+    the same way, and (K//32, 2, ...) with a 16-byte K pack orders K identically
+    to CK's (K//64, 4, ...). So weights shuffled for the CK preshuffle ops work
+    here unchanged. The difference is only in what each accepts: this needs
+    K % 32 == 0 and takes any FP8 dtype, ``ck_preshuffle`` needs K % 64 == 0
+    and float8_e4m3fnuz.
 
     Args:
         src: FP8 weight tensor of shape (N, K).
@@ -242,6 +249,11 @@ def flydsl_preshuffle_gemm(
         waves_per_eu = cfg.waves_per_eu
         xcd_swizzle = cfg.xcd_swizzle
 
+    if tile_n % 64 != 0:
+        # Narrower tiles compile and launch, but leave most of the output
+        # unwritten (tile_n=32 was wrong in every run on gfx950, differently
+        # each time; 16 gives NaN), so refuse them rather than return garbage.
+        raise ValueError(f"tile_n must be a multiple of 64, got {tile_n}")
     if n % tile_n != 0:
         raise RuntimeError(f"N ({n}) not divisible by tile_n ({tile_n})")
     if k % tile_k != 0:
@@ -355,6 +367,14 @@ def flydsl_preshuffle_batched_gemm(
         use_async_copy = cfg.use_async_copy
         waves_per_eu = cfg.waves_per_eu
         xcd_swizzle = cfg.xcd_swizzle
+
+    if tile_n % 64 != 0:
+        # Same limit as flydsl_preshuffle_gemm: narrower tiles leave output unwritten.
+        raise ValueError(f"tile_n must be a multiple of 64, got {tile_n}")
+    if N % tile_n != 0:
+        raise RuntimeError(f"N ({N}) not divisible by tile_n ({tile_n})")
+    if K % tile_k != 0:
+        raise RuntimeError(f"K ({K}) not divisible by tile_k ({tile_k})")
 
     if "float8" in str(XQ.dtype):
         in_dtype = "fp8"
@@ -528,6 +548,137 @@ if torch.version.hip is not None and is_gfx950() and hasattr(torch.ops, "mslk"):
                     use_fast_accum,
                     dtype=torch.float16,
                 )
+
+        # --- preshuffle ops: WQ already in the CK / MFMA preshuffle layout ---
+        # These replace the CK kernels in csrc/gemm/ck/fp8_rowwise_preshuffle,
+        # which stay reachable as mslk::_f8f8{bf16,f16}_rowwise_preshuffle_ck.
+        # For FP8 the CK layout (ck_preshuffle / preshuffle_b_mfma) is the one
+        # this kernel reads, so WQ goes in as given -- no reshuffle.
+        #
+        # The kernel needs N % 64 == 0 and K % 128 == 0 on gfx950 (every
+        # config's tile_n is >= 64; tile_k must be a multiple of 128 for the
+        # scaled MFMA), while CK takes any shape its layout allows: N % 16 and
+        # K % 64. Those shapes are zero-padded instead of refused. The layout is
+        # (N/16, K/64, 4, 16, 16) blocks, so whole zero blocks appended along N
+        # and K form a valid layout for the padded shape: the padded K adds
+        # zeros to every dot product and the padded N columns are sliced off.
+        _PAD_N, _PAD_K = 64, 128
+        _padded_cache: dict[int, tuple[weakref.ref, int, Tensor]] = {}
+
+        def _evict_padded(ref: weakref.ref, key: int) -> None:
+            entry = _padded_cache.get(key)
+            if entry is not None and entry[0] is ref:
+                del _padded_cache[key]
+
+        def _pad_preshuffled(WQ: Tensor, n_pad: int, k_pad: int) -> Tensor:
+            """WQ zero-padded to (n_pad, k_pad) in the preshuffle layout, cached
+            per weight like _get_preshuffled (identity + version, not address)."""
+            key = id(WQ)
+            entry = _padded_cache.get(key)
+            if entry is not None:
+                ref, version, padded = entry
+                if (
+                    ref() is WQ
+                    and version == WQ._version
+                    and padded.shape == (n_pad, k_pad)
+                ):
+                    return padded
+            n, k = WQ.shape
+            blocks = WQ.view(torch.int8).view(n // 16, k // 64, 4, 16, 16)
+            padded = blocks.new_zeros(n_pad // 16, k_pad // 64, 4, 16, 16)
+            padded[: n // 16, : k // 64] = blocks
+            padded = padded.view(n_pad, k_pad).view(WQ.dtype)
+            ref = weakref.ref(WQ, lambda r, k=key: _evict_padded(r, k))
+            _padded_cache[key] = (ref, WQ._version, padded)
+            return padded
+
+        def _flydsl_rowwise_preshuffle_impl(
+            XQ: Tensor,
+            WQ: Tensor,
+            x_scale: Tensor,
+            w_scale: Tensor,
+            bias: Optional[Tensor],
+            use_fast_accum: bool,
+            dtype: torch.dtype,
+        ) -> Tensor:
+            # The CK op's contract (f8f8_rowwise_preshuffle_wrapper), so callers
+            # see the same errors whichever backend serves them.
+            torch._check(
+                XQ.dtype == WQ.dtype,
+                lambda: f"XQ and WQ dtypes must match, got {XQ.dtype} vs {WQ.dtype}",
+            )
+            torch._check(
+                x_scale.dtype == torch.float32 and w_scale.dtype == torch.float32,
+                lambda: "Scales must be float32.",
+            )
+            torch._check(
+                use_fast_accum,
+                lambda: "AMD does not support disabling use_fast_accum.",
+            )
+            torch._check(bias is None, lambda: "AMD does not support fused bias.")
+            torch._check(
+                XQ.is_cuda and XQ.is_contiguous(), lambda: "XQ must be contiguous"
+            )
+            torch._check(
+                WQ.is_cuda and WQ.is_contiguous(), lambda: "WQ must be contiguous"
+            )
+            torch._check(WQ.dim() == 2, lambda: f"WQ must be [N, K], got {WQ.shape}")
+            torch._check(
+                XQ.shape[-1] == WQ.shape[1],
+                lambda: f"K mismatch: XQ {XQ.shape} vs WQ {WQ.shape}",
+            )
+            n, k = WQ.shape
+            m = prod(XQ.shape[:-1])
+            if m == 0 or n == 0 or k == 0:
+                # As CK: zeros of the output shape (k == 0 sums nothing).
+                return XQ.new_zeros((*XQ.shape[:-1], n), dtype=dtype)
+            # The preshuffle layout's own granularity, which ck_preshuffle and
+            # preshuffle_b_mfma enforce too: weights not shaped like this cannot
+            # have been preshuffled in the first place.
+            torch._check(
+                n % 16 == 0 and k % 64 == 0,
+                lambda: f"preshuffled WQ needs N % 16 == 0 and K % 64 == 0, got N={n} K={k}",
+            )
+            n_pad = -(-n // _PAD_N) * _PAD_N
+            k_pad = -(-k // _PAD_K) * _PAD_K
+            if (n_pad, k_pad) == (n, k):
+                return flydsl_preshuffle_gemm(XQ, WQ, x_scale, w_scale, dtype=dtype)
+            xq = XQ
+            if k_pad != k:
+                # Zero bytes are +0.0 in every FP8 format, so pad the raw bytes.
+                xq = torch.nn.functional.pad(XQ.view(torch.int8), (0, k_pad - k))
+                xq = xq.view(XQ.dtype)
+            ws = w_scale.reshape(-1)
+            if n_pad != n:
+                ws = torch.nn.functional.pad(ws, (0, n_pad - n))
+            out = flydsl_preshuffle_gemm(
+                xq, _pad_preshuffled(WQ, n_pad, k_pad), x_scale, ws, dtype=dtype
+            )
+            return out[..., :n].contiguous() if n_pad != n else out
+
+        for _op, _dtype in (
+            ("f8f8bf16_rowwise_preshuffle", torch.bfloat16),
+            ("f8f8f16_rowwise_preshuffle", torch.float16),
+        ):
+            if not hasattr(torch.ops.mslk, _op):
+                continue  # schema absent, as in a python-only build
+
+            def _make_preshuffle_impl(out_dtype: torch.dtype):  # type: ignore[no-untyped-def]
+                def _impl(
+                    XQ: Tensor,
+                    WQ: Tensor,
+                    x_scale: Tensor,
+                    w_scale: Tensor,
+                    bias: Optional[Tensor] = None,
+                    use_fast_accum: bool = True,
+                ) -> Tensor:
+                    return _flydsl_rowwise_preshuffle_impl(
+                        XQ, WQ, x_scale, w_scale, bias, use_fast_accum, out_dtype
+                    )
+
+                return _impl
+
+            torch.library.impl(f"mslk::{_op}", "CUDA")(_make_preshuffle_impl(_dtype))
 
     # --- batched op ---
     if hasattr(torch.ops.mslk, "f8f8bf16_rowwise_batched"):

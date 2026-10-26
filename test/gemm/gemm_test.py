@@ -1576,6 +1576,209 @@ class FP8GroupwiseTests(unittest.TestCase):
             torch.ops.mslk.f8f8bf16_groupwise_grouped(xq, wq, x_scale, w_scale, m_sizes)
 
 
+# (op, output dtype) for the FP8 rowwise ops that take preshuffled weights.
+_ROWWISE_PRESHUFFLE_OPS = [
+    ("f8f8bf16_rowwise_preshuffle", torch.bfloat16),
+    ("f8f8f16_rowwise_preshuffle", torch.float16),
+]
+
+# (M, N, K) spanning CK's dispatch buckets (M <= 16 ... > 4096, K <= 1024 vs
+# larger, N <= 1024 / <= 5120 / larger), on shapes the FlyDSL kernel takes as
+# is (N % 64, K % 128) and CK supports.
+_ROWWISE_PRESHUFFLE_SHAPES = [
+    (1, 1280, 8192),
+    (16, 8192, 1024),
+    (33, 7168, 2048),
+    (128, 1024, 4096),
+    (300, 8192, 3584),
+    (1024, 5120, 1024),
+    (2048, 1280, 8192),
+    (5000, 4096, 512),
+]
+# Valid for the preshuffle layout (N % 16, K % 64) but needing the wrapper's
+# zero padding: K % 128 != 0 and/or N % 64 != 0. CK has no reference here: its
+# instances pad K only, so for an N off its tile it prints "does not support
+# this problem" and returns garbage.
+_ROWWISE_PRESHUFFLE_PADDED_SHAPES = [
+    (33, 1040, 4160),
+    (128, 4096, 4160),
+    (7, 1040, 1024),
+]
+
+
+@skipUnlessRocm()
+@skipUnlessGfxArch("gfx950")
+class FP8RowwisePreshuffleTests(unittest.TestCase):
+    """mslk::f8f8{bf16,f16}_rowwise_preshuffle, served by FlyDSL on gfx950.
+
+    Weights go in already preshuffled into the CK / MFMA B layout
+    (preshuffle_b_mfma). The CK kernels these replace stay reachable as
+    mslk::_f8f8{bf16,f16}_rowwise_preshuffle_ck and are the second reference.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.device = torch.accelerator.current_accelerator()
+
+    def _quantized(
+        self, M: int, N: int, K: int, lead: tuple[int, ...] = ()
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        x = torch.randn((*lead, M, K), dtype=torch.bfloat16, device=self.device) * 0.1
+        w = torch.randn((N, K), dtype=torch.bfloat16, device=self.device) * 0.01
+        xq, x_scale = quantize_fp8_row(x)
+        wq, w_scale = quantize_fp8_row(w)
+        return xq, wq, x_scale, w_scale
+
+    @staticmethod
+    def _reference(
+        xq: torch.Tensor,
+        wq: torch.Tensor,
+        x_scale: torch.Tensor,
+        w_scale: torch.Tensor,
+    ) -> torch.Tensor:
+        return (xq.float() @ wq.float().T) * x_scale[..., None] * w_scale
+
+    @parameterized.expand(
+        [
+            (*shape, op, dtype)
+            for shape in _ROWWISE_PRESHUFFLE_SHAPES + _ROWWISE_PRESHUFFLE_PADDED_SHAPES
+            for op, dtype in _ROWWISE_PRESHUFFLE_OPS
+        ]
+    )
+    def test_matches_reference(
+        self, M: int, N: int, K: int, op: str, dtype: torch.dtype
+    ) -> None:
+        from mslk.quantize.shuffle import preshuffle_b_mfma
+
+        xq, wq, x_scale, w_scale = self._quantized(M, N, K)
+        out = getattr(torch.ops.mslk, op)(xq, preshuffle_b_mfma(wq), x_scale, w_scale)
+        self.assertEqual(out.dtype, dtype)
+        self.assertEqual(out.shape, (M, N))
+        ref = self._reference(xq, wq, x_scale, w_scale)
+        torch.testing.assert_close(out.float(), ref, atol=1e-3, rtol=1e-2)
+
+    @parameterized.expand(
+        [
+            (*shape, op, dtype)
+            for shape in _ROWWISE_PRESHUFFLE_SHAPES
+            for op, dtype in _ROWWISE_PRESHUFFLE_OPS
+        ]
+    )
+    def test_matches_ck(
+        self, M: int, N: int, K: int, op: str, dtype: torch.dtype
+    ) -> None:
+        from mslk.quantize.shuffle import preshuffle_b_mfma
+
+        xq, wq, x_scale, w_scale = self._quantized(M, N, K)
+        wq_shuf = preshuffle_b_mfma(wq)
+        out = getattr(torch.ops.mslk, op)(xq, wq_shuf, x_scale, w_scale)
+        ck = getattr(torch.ops.mslk, f"_{op}_ck")(xq, wq_shuf, x_scale, w_scale)
+        self.assertEqual(ck.dtype, dtype)
+        torch.testing.assert_close(out, ck, atol=1e-3, rtol=1e-2)
+
+    def test_layouts_agree(self) -> None:
+        # The ops take weights shuffled by either helper, and the FlyDSL
+        # kernel's own shuffle is the same layout: all three must agree byte for
+        # byte. ck_preshuffle only accepts e4m3fnuz, so feed it the same bytes.
+        from mslk.quantize.shuffle import ck_preshuffle, preshuffle_b_mfma
+
+        for N, K in [(16, 64), (1040, 4160), (7168, 2048)]:
+            raw = torch.randint(-128, 128, (N, K), dtype=torch.int8, device=self.device)
+            wq = raw.view(fp8_e4m3)
+            ck = ck_preshuffle(raw.view(torch.float8_e4m3fnuz), 16).view(torch.int8)
+            self.assertTrue(torch.equal(ck, preshuffle_b_mfma(wq).view(torch.int8)))
+            self.assertTrue(torch.equal(ck, flydsl_preshuffle(wq).view(torch.int8)))
+
+    @parameterized.expand(_ROWWISE_PRESHUFFLE_OPS)
+    def test_multidim_input(self, op: str, dtype: torch.dtype) -> None:
+        from mslk.quantize.shuffle import preshuffle_b_mfma
+
+        xq, wq, x_scale, w_scale = self._quantized(48, 1024, 2048, lead=(3,))
+        out = getattr(torch.ops.mslk, op)(xq, preshuffle_b_mfma(wq), x_scale, w_scale)
+        self.assertEqual(out.shape, (3, 48, 1024))
+        self.assertEqual(out.dtype, dtype)
+        ref = self._reference(xq, wq, x_scale, w_scale)
+        torch.testing.assert_close(out.float(), ref, atol=1e-3, rtol=1e-2)
+
+    @parameterized.expand(_ROWWISE_PRESHUFFLE_OPS)
+    def test_empty_dims(self, op: str, dtype: torch.dtype) -> None:
+        fn = getattr(torch.ops.mslk, op)
+        for M, N, K in [(0, 128, 256), (32, 0, 256), (32, 128, 0)]:
+            xq = torch.zeros((M, K), device=self.device).to(fp8_e4m3)
+            wq = torch.zeros((N, K), device=self.device).to(fp8_e4m3)
+            x_scale = torch.ones(M, device=self.device)
+            w_scale = torch.ones(N, device=self.device)
+            out = fn(xq, wq, x_scale, w_scale)
+            self.assertEqual(out.shape, (M, N))
+            self.assertEqual(out.dtype, dtype)
+            self.assertTrue(torch.all(out == 0).item())
+
+    @parameterized.expand(_ROWWISE_PRESHUFFLE_OPS)
+    def test_rejects_what_ck_rejects(self, op: str, dtype: torch.dtype) -> None:
+        from mslk.quantize.shuffle import preshuffle_b_mfma
+
+        fn = getattr(torch.ops.mslk, op)
+        xq, wq, x_scale, w_scale = self._quantized(16, 256, 512)
+        wq = preshuffle_b_mfma(wq)
+        bias = torch.zeros(256, dtype=dtype, device=self.device)
+        with self.assertRaisesRegex(RuntimeError, "fused bias"):
+            fn(xq, wq, x_scale, w_scale, bias)
+        with self.assertRaisesRegex(RuntimeError, "use_fast_accum"):
+            fn(xq, wq, x_scale, w_scale, None, False)
+        with self.assertRaisesRegex(RuntimeError, "float32"):
+            fn(xq, wq, x_scale.bfloat16(), w_scale)
+        with self.assertRaisesRegex(RuntimeError, "N % 16"):
+            fn(xq, wq[:40], x_scale, w_scale[:40])
+
+    def test_rejects_narrow_tile_n(self) -> None:
+        # tile_n < 64 compiles and launches but leaves most of the output
+        # unwritten, so explicit tiles that narrow must be refused.
+        xq, wq, x_scale, w_scale = self._quantized(16, 1024, 1024)
+        for tile_n in (16, 32):
+            with self.assertRaisesRegex(ValueError, "multiple of 64"):
+                flydsl_preshuffle_gemm(
+                    xq,
+                    flydsl_preshuffle(wq),
+                    x_scale,
+                    w_scale,
+                    tile_m=16,
+                    tile_n=tile_n,
+                    tile_k=512,
+                )
+
+    @parameterized.expand(_ROWWISE_PRESHUFFLE_OPS)
+    def test_padded_weight_follows_inplace_update(
+        self, op: str, dtype: torch.dtype
+    ) -> None:
+        # Padded shapes cache the zero-padded weight per weight tensor; an
+        # in-place update must not be served the stale copy.
+        from mslk.quantize.shuffle import preshuffle_b_mfma
+
+        fn = getattr(torch.ops.mslk, op)
+        xq, wq, x_scale, w_scale = self._quantized(16, 1040, 4160)
+        wq_shuf = preshuffle_b_mfma(wq)
+        fn(xq, wq_shuf, x_scale, w_scale)
+        _, wq2, _, w_scale2 = self._quantized(16, 1040, 4160)
+        wq_shuf.copy_(preshuffle_b_mfma(wq2))
+        out = fn(xq, wq_shuf, x_scale, w_scale2)
+        ref = self._reference(xq, wq2, x_scale, w_scale2)
+        torch.testing.assert_close(out.float(), ref, atol=1e-3, rtol=1e-2)
+
+    @parameterized.expand(_ROWWISE_PRESHUFFLE_OPS)
+    def test_opcheck(self, op: str, dtype: torch.dtype) -> None:
+        from mslk.quantize.shuffle import preshuffle_b_mfma
+
+        # Fake kernel vs real output (shape, dtype) on a 3D input. test_schema
+        # is left out: its mutation check multiplies the inputs, which torch
+        # does not implement for float8_e4m3fn.
+        xq, wq, x_scale, w_scale = self._quantized(64, 1024, 1024, lead=(2,))
+        torch.library.opcheck(
+            getattr(torch.ops.mslk, op),
+            (xq, preshuffle_b_mfma(wq), x_scale, w_scale),
+            test_utils=("test_faketensor",),
+        )
+
+
 @skipUnlessCuda()
 @skipUnlessCudaCapability(9, 9)
 class BF16Int4Tests(unittest.TestCase):
