@@ -36,6 +36,14 @@
 #else
 #include <mslk/utils/tuning_cache_hip.cuh>
 #include <mslk/utils/device/hip_utilities.cuh>
+// The OSS ROCm build gets c10/hip/HIPException.h, which spells these
+// C10_HIP_*; the C10_CUDA_* names below only exist on the fbcode path.
+#ifndef C10_CUDA_CHECK
+#define C10_CUDA_CHECK C10_HIP_CHECK
+#endif
+#ifndef C10_CUDA_KERNEL_LAUNCH_CHECK
+#define C10_CUDA_KERNEL_LAUNCH_CHECK C10_HIP_KERNEL_LAUNCH_CHECK
+#endif
 #endif
 
 #include <mslk/utils/utils.h>
