@@ -54,45 +54,167 @@ DEFAULT_CONFIGS_GFX950: dict[int, KernelConfig] = {
 
 # Profile-guided overrides: (m_upper_bound, n, k) -> KernelConfig
 # Entries are checked in order; first match where m <= m_upper_bound wins.
+# Each (N, K) was swept over M in 1 .. 8192 (every tile_m/tile_n/tile_k that
+# computes correctly, x waves_per_eu, xcd_swizzle, async copy, cshuffle
+# epilogue), and the last bucket per (N, K) covers every larger M.
+_M_ANY = 1 << 62
 _SHAPE_OVERRIDES_GFX950: list[tuple[int, int, int, KernelConfig]] = [
-    # N=1280, K=8192: sweep-tuned per M range
-    (1, 1280, 8192, KernelConfig(64, 128, 256, 2, xcd_swizzle=1, waves_per_eu=2)),
-    (64, 1280, 8192, KernelConfig(32, 128, 256, 2, xcd_swizzle=4, waves_per_eu=2)),
-    (256, 1280, 8192, KernelConfig(64, 64, 128, 2, xcd_swizzle=1)),
-    (512, 1280, 8192, KernelConfig(64, 256, 128, 2, xcd_swizzle=1)),
-    (2048, 1280, 8192, KernelConfig(128, 256, 128, 2, xcd_swizzle=1, waves_per_eu=2)),
-    (8192, 1280, 8192, KernelConfig(128, 256, 128, 2, waves_per_eu=2)),
-    # N=8192, K=1024: sweep-tuned per M range
-    (1, 8192, 1024, KernelConfig(16, 64, 512, 2, waves_per_eu=1)),
-    (256, 8192, 1024, KernelConfig(128, 256, 128, 2, xcd_swizzle=1, waves_per_eu=2)),
-    (8192, 8192, 1024, KernelConfig(128, 256, 128, 2, xcd_swizzle=1, waves_per_eu=2)),
-    # N=8192, K=8192: sweep-tuned (WP-1a, 2026-09-08)
-    (1, 8192, 8192, KernelConfig(32, 64, 512, 2, xcd_swizzle=1)),
-    (64, 8192, 8192, KernelConfig(32, 64, 512, 2, xcd_swizzle=1)),
-    (128, 8192, 8192, KernelConfig(64, 64, 256, 2, xcd_swizzle=1)),
-    (512, 8192, 8192, KernelConfig(64, 64, 256, 2, xcd_swizzle=1)),
-    (2048, 8192, 8192, KernelConfig(64, 256, 128, 2, xcd_swizzle=4)),
-    (8192, 8192, 8192, KernelConfig(128, 256, 128, 2, waves_per_eu=2)),
-    # N=7168, K=8192: sweep-tuned (WP-1a, 2026-09-08)
-    (1, 7168, 8192, KernelConfig(32, 64, 512, 2, xcd_swizzle=1)),
+    # N=1024, K=4096: sweep-tuned on gfx950 (FlyDSL 0.4.0, 2026-10-27)
+    (1, 1024, 4096, KernelConfig(16, 64, 256, 2, use_async_copy=1, waves_per_eu=2)),
+    (16, 1024, 4096, KernelConfig(16, 64, 256, 2, use_async_copy=1)),
+    (32, 1024, 4096, KernelConfig(16, 64, 256, 2, use_async_copy=1, waves_per_eu=2)),
+    (64, 1024, 4096, KernelConfig(16, 64, 256, 2, waves_per_eu=2)),
+    (128, 1024, 4096, KernelConfig(32, 64, 512, 2, xcd_swizzle=1)),
+    (256, 1024, 4096, KernelConfig(64, 64, 256, 2, use_async_copy=1, waves_per_eu=1)),
+    (512, 1024, 4096, KernelConfig(64, 64, 256, 2, use_async_copy=1, xcd_swizzle=4)),
+    (1024, 1024, 4096, KernelConfig(64, 64, 256, 2)),
+    (2048, 1024, 4096, KernelConfig(64, 128, 256, 2, waves_per_eu=2)),
+    (4096, 1024, 4096, KernelConfig(64, 128, 128, 2, waves_per_eu=2)),
+    (_M_ANY, 1024, 4096, KernelConfig(64, 256, 128, 2)),
+    # N=1280, K=8192: sweep-tuned on gfx950 (FlyDSL 0.4.0, 2026-10-27)
+    (16, 1280, 8192, KernelConfig(16, 64, 512, 2, use_cshuffle_epilog=1, use_async_copy=1)),
+    (32, 1280, 8192, KernelConfig(16, 64, 256, 2)),
+    (64, 1280, 8192, KernelConfig(16, 64, 256, 2, waves_per_eu=2, xcd_swizzle=1)),
+    (128, 1280, 8192, KernelConfig(32, 64, 512, 2, xcd_swizzle=1)),
+    (256, 1280, 8192, KernelConfig(64, 64, 256, 2, xcd_swizzle=1)),
+    (512, 1280, 8192, KernelConfig(64, 64, 256, 2, waves_per_eu=2)),
+    (1024, 1280, 8192, KernelConfig(64, 128, 512, 2)),
+    (2048, 1280, 8192, KernelConfig(64, 128, 128, 2)),
+    (4096, 1280, 8192, KernelConfig(128, 128, 128, 2, use_cshuffle_epilog=1, use_async_copy=1, waves_per_eu=2)),
+    (_M_ANY, 1280, 8192, KernelConfig(64, 128, 256, 2)),
+    # N=2048, K=7168: sweep-tuned on gfx950 (FlyDSL 0.4.0, 2026-10-27)
+    (1, 2048, 7168, KernelConfig(16, 64, 512, 2, use_cshuffle_epilog=1, use_async_copy=1)),
+    (16, 2048, 7168, KernelConfig(16, 64, 512, 2, use_cshuffle_epilog=1, use_async_copy=1, waves_per_eu=2)),
+    (64, 2048, 7168, KernelConfig(16, 64, 256, 2, waves_per_eu=2, xcd_swizzle=1)),
+    (128, 2048, 7168, KernelConfig(32, 64, 512, 2, xcd_swizzle=1)),
+    (512, 2048, 7168, KernelConfig(64, 64, 256, 2, waves_per_eu=2, xcd_swizzle=1)),
+    (1024, 2048, 7168, KernelConfig(64, 128, 256, 2, waves_per_eu=2)),
+    (2048, 2048, 7168, KernelConfig(64, 128, 128, 2, waves_per_eu=2, xcd_swizzle=1)),
+    (4096, 2048, 7168, KernelConfig(128, 128, 128, 2, use_cshuffle_epilog=1, use_async_copy=1, waves_per_eu=2, xcd_swizzle=4)),
+    (_M_ANY, 2048, 7168, KernelConfig(256, 256, 128, 2)),
+    # N=4096, K=4096: sweep-tuned on gfx950 (FlyDSL 0.4.0, 2026-10-27)
+    (1, 4096, 4096, KernelConfig(16, 64, 256, 2, use_cshuffle_epilog=1, use_async_copy=1)),
+    (16, 4096, 4096, KernelConfig(16, 64, 256, 2)),
+    (64, 4096, 4096, KernelConfig(16, 64, 256, 2, xcd_swizzle=1)),
+    (128, 4096, 4096, KernelConfig(32, 64, 512, 2, xcd_swizzle=1)),
+    (256, 4096, 4096, KernelConfig(64, 64, 256, 2, waves_per_eu=2, xcd_swizzle=1)),
+    (512, 4096, 4096, KernelConfig(64, 128, 512, 2, waves_per_eu=2, xcd_swizzle=1)),
+    (1024, 4096, 4096, KernelConfig(64, 128, 128, 2, xcd_swizzle=1)),
+    (2048, 4096, 4096, KernelConfig(128, 128, 128, 2, use_async_copy=1, waves_per_eu=1)),
+    (4096, 4096, 4096, KernelConfig(64, 256, 128, 2, waves_per_eu=2)),
+    (_M_ANY, 4096, 4096, KernelConfig(64, 256, 128, 2)),
+    # N=5120, K=1024: sweep-tuned on gfx950 (FlyDSL 0.4.0, 2026-10-27)
+    (1, 5120, 1024, KernelConfig(16, 64, 512, 2, use_cshuffle_epilog=1, waves_per_eu=2)),
+    (16, 5120, 1024, KernelConfig(16, 64, 512, 2, use_cshuffle_epilog=1, waves_per_eu=1)),
+    (32, 5120, 1024, KernelConfig(16, 64, 512, 2)),
+    (128, 5120, 1024, KernelConfig(32, 64, 128, 2, waves_per_eu=2)),
+    (256, 5120, 1024, KernelConfig(64, 128, 128, 2, waves_per_eu=2)),
+    (1024, 5120, 1024, KernelConfig(64, 128, 128, 2, waves_per_eu=2, xcd_swizzle=1)),
+    (2048, 5120, 1024, KernelConfig(64, 128, 256, 2, xcd_swizzle=1)),
+    (4096, 5120, 1024, KernelConfig(64, 128, 128, 2)),
+    (_M_ANY, 5120, 1024, KernelConfig(64, 256, 128, 2, waves_per_eu=2)),
+    # N=7168, K=2048: sweep-tuned on gfx950 (FlyDSL 0.4.0, 2026-10-27)
+    (1, 7168, 2048, KernelConfig(16, 64, 256, 2, use_async_copy=1, xcd_swizzle=1)),
+    (16, 7168, 2048, KernelConfig(16, 64, 512, 2, waves_per_eu=2)),
+    (32, 7168, 2048, KernelConfig(16, 64, 256, 2, waves_per_eu=2, xcd_swizzle=1)),
+    (64, 7168, 2048, KernelConfig(16, 128, 256, 2, waves_per_eu=2, xcd_swizzle=1)),
+    (128, 7168, 2048, KernelConfig(32, 128, 128, 2, waves_per_eu=2, xcd_swizzle=1)),
+    (512, 7168, 2048, KernelConfig(64, 128, 128, 2, waves_per_eu=2, xcd_swizzle=1)),
+    (1024, 7168, 2048, KernelConfig(64, 256, 128, 2, xcd_swizzle=1)),
+    (_M_ANY, 7168, 2048, KernelConfig(64, 256, 128, 2)),
+    # N=7168, K=8192: sweep-tuned on gfx950 (FlyDSL 0.4.0, 2026-10-27)
+    (1, 7168, 8192, KernelConfig(16, 64, 512, 2, use_cshuffle_epilog=1, use_async_copy=1, waves_per_eu=2, xcd_swizzle=1)),
+    (16, 7168, 8192, KernelConfig(16, 64, 512, 2, use_cshuffle_epilog=1, waves_per_eu=2, xcd_swizzle=1)),
+    (32, 7168, 8192, KernelConfig(16, 64, 512, 2, xcd_swizzle=1)),
     (64, 7168, 8192, KernelConfig(32, 64, 512, 2, xcd_swizzle=1)),
-    (128, 7168, 8192, KernelConfig(64, 64, 256, 2, xcd_swizzle=1)),
-    (512, 7168, 8192, KernelConfig(64, 64, 256, 2, xcd_swizzle=1)),
-    (2048, 7168, 8192, KernelConfig(64, 256, 128, 2, xcd_swizzle=4)),
-    (8192, 7168, 8192, KernelConfig(128, 256, 128, 2, waves_per_eu=2)),
-    # N=8192, K=3584: sweep-tuned (WP-1a, 2026-09-08)
-    (1, 8192, 3584, KernelConfig(32, 64, 512, 2, xcd_swizzle=1)),
-    (128, 8192, 3584, KernelConfig(64, 64, 128, 2, xcd_swizzle=1)),
-    (512, 8192, 3584, KernelConfig(64, 64, 128, 2, xcd_swizzle=1)),
-    (2048, 8192, 3584, KernelConfig(64, 256, 128, 2, xcd_swizzle=4)),
-    (8192, 8192, 3584, KernelConfig(128, 256, 128, 2, waves_per_eu=2)),
+    (128, 7168, 8192, KernelConfig(32, 128, 256, 2, use_async_copy=1, xcd_swizzle=1)),
+    (256, 7168, 8192, KernelConfig(64, 128, 512, 2, xcd_swizzle=1)),
+    (512, 7168, 8192, KernelConfig(64, 128, 128, 2, waves_per_eu=2, xcd_swizzle=1)),
+    (1024, 7168, 8192, KernelConfig(128, 128, 128, 2, use_cshuffle_epilog=1, use_async_copy=1, waves_per_eu=2, xcd_swizzle=4)),
+    (2048, 7168, 8192, KernelConfig(128, 128, 256, 2, use_async_copy=1, waves_per_eu=2, xcd_swizzle=4)),
+    (4096, 7168, 8192, KernelConfig(64, 256, 128, 2)),
+    (_M_ANY, 7168, 8192, KernelConfig(128, 256, 128, 2)),
+    # N=8192, K=1024: sweep-tuned on gfx950 (FlyDSL 0.4.0, 2026-10-27)
+    (1, 8192, 1024, KernelConfig(16, 64, 512, 2, xcd_swizzle=4)),
+    (16, 8192, 1024, KernelConfig(16, 64, 512, 2, use_cshuffle_epilog=1, waves_per_eu=1, xcd_swizzle=1)),
+    (32, 8192, 1024, KernelConfig(16, 64, 512, 2, xcd_swizzle=1)),
+    (128, 8192, 1024, KernelConfig(32, 64, 128, 2, waves_per_eu=2, xcd_swizzle=1)),
+    (512, 8192, 1024, KernelConfig(64, 128, 128, 2, xcd_swizzle=1)),
+    (1024, 8192, 1024, KernelConfig(64, 256, 128, 2, xcd_swizzle=1)),
+    (2048, 8192, 1024, KernelConfig(64, 256, 128, 2, waves_per_eu=2)),
+    (_M_ANY, 8192, 1024, KernelConfig(64, 256, 128, 2)),
+    # N=8192, K=3584: sweep-tuned on gfx950 (FlyDSL 0.4.0, 2026-10-27)
+    (32, 8192, 3584, KernelConfig(16, 64, 256, 2, xcd_swizzle=1)),
+    (64, 8192, 3584, KernelConfig(32, 64, 512, 2, waves_per_eu=2, xcd_swizzle=1)),
+    (128, 8192, 3584, KernelConfig(32, 64, 256, 2, xcd_swizzle=1)),
+    (256, 8192, 3584, KernelConfig(64, 128, 512, 2, waves_per_eu=2, xcd_swizzle=1)),
+    (512, 8192, 3584, KernelConfig(64, 128, 128, 2, waves_per_eu=2, xcd_swizzle=1)),
+    (1024, 8192, 3584, KernelConfig(128, 128, 128, 2, use_cshuffle_epilog=1, use_async_copy=1, waves_per_eu=1, xcd_swizzle=4)),
+    (2048, 8192, 3584, KernelConfig(64, 256, 128, 2)),
+    (_M_ANY, 8192, 3584, KernelConfig(256, 256, 128, 2)),
+    # N=8192, K=8192: sweep-tuned on gfx950 (FlyDSL 0.4.0, 2026-10-27)
+    (1, 8192, 8192, KernelConfig(16, 64, 512, 2, waves_per_eu=1, xcd_swizzle=1)),
+    (32, 8192, 8192, KernelConfig(16, 64, 512, 2, xcd_swizzle=1)),
+    (64, 8192, 8192, KernelConfig(32, 64, 512, 2, waves_per_eu=2, xcd_swizzle=1)),
+    (128, 8192, 8192, KernelConfig(32, 64, 512, 2, use_async_copy=1, xcd_swizzle=1)),
+    (256, 8192, 8192, KernelConfig(64, 128, 512, 2, waves_per_eu=2, xcd_swizzle=1)),
+    (512, 8192, 8192, KernelConfig(64, 128, 128, 2, xcd_swizzle=1)),
+    (1024, 8192, 8192, KernelConfig(128, 128, 128, 2, use_cshuffle_epilog=1, use_async_copy=1, waves_per_eu=2, xcd_swizzle=4)),
+    (2048, 8192, 8192, KernelConfig(128, 128, 256, 2, use_async_copy=1, waves_per_eu=2, xcd_swizzle=4)),
+    (4096, 8192, 8192, KernelConfig(64, 256, 128, 2)),
+    (_M_ANY, 8192, 8192, KernelConfig(128, 256, 128, 2, waves_per_eu=2, xcd_swizzle=1)),
 ]
+
+
+def _heuristic_config_gfx950(m: int, n: int, k: int) -> Optional[KernelConfig]:
+    """Tile choice for shapes without a tuned entry, distilled from the sweep
+    behind _SHAPE_OVERRIDES_GFX950 (10 N x K pairs, M = 1 .. 8192) and checked
+    on 8 held-out N x K pairs: the winners bucket by M much like CK's dispatch,
+    tile_k follows K, and async copy wins nearly everywhere. Above M = 512 the
+    async winners are 128x128 tiles with the cross-XCD swizzle.
+    Returns None when the shape does not divide into the rule's tiles."""
+
+    def tk_for(*prefs: int) -> Optional[int]:
+        return next((t for t in prefs if k % t == 0), None)
+
+    wpe, xcd = 0, 1
+    if m <= 32:
+        tm, tn = 16, 64
+        big_or_small_k = k <= 1024 or k >= 7168
+        tk = tk_for(512, 256, 128) if big_or_small_k else tk_for(256, 128)
+    elif m <= 128:
+        tm, tn = 32, 64
+        tk = tk_for(128) if k <= 1024 else tk_for(512, 256, 128)
+    elif m <= 512:
+        tm, tn = 64, (64 if n <= 2048 else 128)
+        tk = tk_for(256, 128) if n <= 2048 or k >= 4096 else tk_for(128)
+    else:
+        tm, tn, wpe, xcd = 128, 128, 2, 4
+        tk = tk_for(128)
+    while tn > 64 and n % tn:
+        tn //= 2
+    if tk is None or n % tn:
+        return None
+    # The A tile is loaded 16 bytes per thread across 256 threads, so
+    # tile_m * tile_k must be a multiple of 4096 (16x64x128 is rejected).
+    while (tm * tk) % 4096:
+        tm *= 2
+    return KernelConfig(
+        tm, tn, tk, 2, use_async_copy=1, waves_per_eu=wpe, xcd_swizzle=xcd
+    )
 
 
 def select_default_config(m: int, n: int, k: int, batch: int = 1) -> KernelConfig:
     """Select a default FlyDSL tile config based on shape heuristics."""
     for m_upper, n_val, k_val, cfg in _SHAPE_OVERRIDES_GFX950:
         if n == n_val and k == k_val and m <= m_upper:
+            return cfg
+
+    # Batched launches multiply the grid, so the per-GEMM M buckets above do
+    # not apply; they keep the occupancy-aware pick below.
+    if batch == 1:
+        cfg = _heuristic_config_gfx950(m, n, k)
+        if cfg is not None:
             return cfg
 
     configs = DEFAULT_CONFIGS_GFX950

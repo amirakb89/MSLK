@@ -1603,6 +1603,9 @@ _ROWWISE_PRESHUFFLE_PADDED_SHAPES = [
     (33, 1040, 4160),
     (128, 4096, 4160),
     (7, 1040, 1024),
+    # M <= 32 with a padded K (4224) that is not a multiple of 256: the
+    # default rule must not pick a 16-row tile with tile_k=128.
+    (16, 1040, 4160),
 ]
 
 
