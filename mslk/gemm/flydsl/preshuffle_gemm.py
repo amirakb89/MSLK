@@ -81,8 +81,8 @@ _SHAPE_OVERRIDES_GFX950: list[tuple[int, int, int, KernelConfig]] = [
     (512, 1280, 8192, KernelConfig(64, 64, 256, 2, waves_per_eu=2)),
     (1024, 1280, 8192, KernelConfig(64, 128, 512, 2)),
     (2048, 1280, 8192, KernelConfig(64, 128, 128, 2)),
-    (4096, 1280, 8192, KernelConfig(128, 128, 128, 2, use_cshuffle_epilog=1, use_async_copy=1, waves_per_eu=2)),
-    (_M_ANY, 1280, 8192, KernelConfig(64, 128, 256, 2)),
+    (6144, 1280, 8192, KernelConfig(128, 128, 128, 2, use_cshuffle_epilog=1, use_async_copy=1, waves_per_eu=2)),
+    (_M_ANY, 1280, 8192, KernelConfig(128, 128, 256, 2, use_async_copy=1, waves_per_eu=2, xcd_swizzle=4)),
     # N=2048, K=7168: sweep-tuned on gfx950 (FlyDSL 0.4.0, 2026-10-27)
     (1, 2048, 7168, KernelConfig(16, 64, 512, 2, use_cshuffle_epilog=1, use_async_copy=1)),
     (16, 2048, 7168, KernelConfig(16, 64, 512, 2, use_cshuffle_epilog=1, use_async_copy=1, waves_per_eu=2)),
@@ -150,9 +150,7 @@ _SHAPE_OVERRIDES_GFX950: list[tuple[int, int, int, KernelConfig]] = [
     (128, 8192, 3584, KernelConfig(32, 64, 256, 2, xcd_swizzle=1)),
     (256, 8192, 3584, KernelConfig(64, 128, 512, 2, waves_per_eu=2, xcd_swizzle=1)),
     (512, 8192, 3584, KernelConfig(64, 128, 128, 2, waves_per_eu=2, xcd_swizzle=1)),
-    (1024, 8192, 3584, KernelConfig(128, 128, 128, 2, use_cshuffle_epilog=1, use_async_copy=1, waves_per_eu=1, xcd_swizzle=4)),
-    (2048, 8192, 3584, KernelConfig(64, 256, 128, 2)),
-    (_M_ANY, 8192, 3584, KernelConfig(256, 256, 128, 2)),
+    (_M_ANY, 8192, 3584, KernelConfig(128, 128, 128, 2, use_cshuffle_epilog=1, use_async_copy=1, waves_per_eu=1, xcd_swizzle=4)),
     # N=8192, K=8192: sweep-tuned on gfx950 (FlyDSL 0.4.0, 2026-10-27)
     (1, 8192, 8192, KernelConfig(16, 64, 512, 2, waves_per_eu=1, xcd_swizzle=1)),
     (32, 8192, 8192, KernelConfig(16, 64, 512, 2, xcd_swizzle=1)),
