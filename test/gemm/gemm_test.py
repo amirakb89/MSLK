@@ -36,7 +36,12 @@ from mslk.testing.device import (
     skipUnlessGfxArch,
     skipUnlessRocm,
 )
-from mslk.utils.device import compute_capability_in, is_gfx950, supports_float8_fnuz
+from mslk.utils.device import (
+    compute_capability_in,
+    is_gfx942,
+    is_gfx950,
+    supports_float8_fnuz,
+)
 
 if torch.cuda.is_available():
     from mslk.gemm.flydsl.preshuffle_gemm import (
@@ -175,8 +180,8 @@ def _fp8_gemm_cases() -> list[tuple]:
         torch.version.cuda is not None and compute_capability_in(9, 9)
     ) or torch.version.hip is not None
     modes = ["rowwise"] + (["blockwise"] if blockwise_supported else [])
-    # The rowwise preshuffle ops, which FlyDSL serves on gfx950.
-    if torch.version.hip is not None and is_gfx950():
+    # The rowwise preshuffle ops, which FlyDSL serves on gfx942 and gfx950.
+    if torch.version.hip is not None and (is_gfx942() or is_gfx950()):
         modes.append("rowwise_preshuffle")
 
     def case(
@@ -4191,7 +4196,7 @@ class FlyDSLPreshuffleBatchedGemmTest(unittest.TestCase):
 
 
 @skipUnlessRocm()
-@skipUnlessGfxArch("gfx950")
+@skipUnlessGfxArch("gfx942", "gfx950")
 @unittest.skipUnless(
     is_flydsl_version_at_least(),
     f"requires FlyDSL >= {MIN_FLYDSL_VERSION}, found {flydsl_version()}",

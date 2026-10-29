@@ -11,7 +11,8 @@
 Provides single and batched FP8 preshuffle GEMM via FlyDSL. Also registers
 as the ROCm implementation of the ``mslk`` rowwise FP8 ops on gfx950, and
 provides the one ``mslk/gemm/__init__.py`` dispatches the preshuffle ops
-(``f8f8{bf16,f16}_rowwise_preshuffle``, CK-preshuffled weights) to.
+(``f8f8{bf16,f16}_rowwise_preshuffle``, CK-preshuffled weights) to on gfx942
+and gfx950.
 """
 
 import weakref
@@ -20,7 +21,7 @@ from math import prod
 from typing import Optional
 
 import torch
-from mslk.utils.device import is_gfx950
+from mslk.utils.device import is_gfx942, is_gfx950
 from torch import Tensor
 
 
@@ -558,12 +559,13 @@ def flydsl_preshuffle_batched_gemm(
 
 def is_supported() -> bool:
     """Whether this module can serve the rowwise preshuffle ops on the current
-    GPU; ``mslk/gemm/__init__.py`` falls back to CK when it is False."""
-    return is_gfx950()
+    GPU (gfx942 or gfx950); ``mslk/gemm/__init__.py`` falls back to CK when it
+    is False."""
+    return is_gfx942() or is_gfx950()
 
 
-# The kernel needs N % 64 == 0 and K % 128 == 0 on gfx950 (every config's tile_n
-# is >= 64; tile_k must be a multiple of 128 for the scaled MFMA), while CK takes
+# The kernel needs N % 64 == 0 and K % 128 == 0 (every config's tile_n is >= 64
+# and tile_k a multiple of 128, which gfx950's scaled MFMA requires), while CK takes
 # any shape its layout allows: N % 16 and K % 64. Those shapes are zero-padded
 # instead of refused. The layout is (N/16, K/64, 4, 16, 16) blocks, so whole zero
 # blocks appended along N and K form a valid layout for the padded shape: the
@@ -665,7 +667,7 @@ def matmul_f8f8bf16_rowwise_preshuffle(
     bias: Optional[Tensor] = None,
     use_fast_accum: bool = True,
 ) -> Tensor:
-    """FlyDSL impl of ``mslk::f8f8bf16_rowwise_preshuffle`` on gfx950."""
+    """FlyDSL impl of ``mslk::f8f8bf16_rowwise_preshuffle`` on gfx950 and gfx942."""
     return _rowwise_preshuffle(
         XQ, WQ, x_scale, w_scale, bias, use_fast_accum, torch.bfloat16
     )
@@ -679,7 +681,7 @@ def matmul_f8f8f16_rowwise_preshuffle(
     bias: Optional[Tensor] = None,
     use_fast_accum: bool = True,
 ) -> Tensor:
-    """FlyDSL impl of ``mslk::f8f8f16_rowwise_preshuffle`` on gfx950."""
+    """FlyDSL impl of ``mslk::f8f8f16_rowwise_preshuffle`` on gfx950 and gfx942."""
     return _rowwise_preshuffle(
         XQ, WQ, x_scale, w_scale, bias, use_fast_accum, torch.float16
     )

@@ -245,7 +245,7 @@ if torch.version.hip is not None:
         torch.ops.mslk, "_f8f8bf16_rowwise_preshuffle_ck"
     ):
         # Selected the same way as the stacked BF16 op above: FlyDSL where it
-        # is opted into and supported (gfx950), else the CK kernels that
+        # is opted into and supported (gfx942, gfx950), else the CK kernels that
         # gemm_ops.cpp binds under private names.
         @functools.lru_cache(maxsize=None)
         def _rowwise_preshuffle_impl(op: str) -> Callable[..., torch.Tensor]:
